@@ -135,16 +135,16 @@ const toLevelLabel = (v) => (v > 0.5 ? 'High' : 'Low');
 
 const ENGAGEMENT_LEVELS = {
   // [CHANGED] Departure engagement is fixed to low (fully focused on the manual task, not looking at robot)
-  departure: { level: 'low', description: "You remain focused on the task and do not look up." },
+  departure: { level: 'low', description: "I remain focused on the task and do not look up." },
   approach: [
-    { level: 'low', description: "You remain focused and do not look up." },
-    { level: 'mid', description: "You glance at the robot but keep working." },
-    { level: 'high', description: "You look up and pause your activity." }
+    { level: 'low', description: "I stay focused and do not look at the robot." },
+    { level: 'mid', description: "I briefly glance at the robot but keep working." },
+    { level: 'high', description: "I fully look at the robot and pause what I'm doing." }
   ],
   arrival: [
-    { level: 'low', description: "You stay focused and don't acknowledge." },
-    { level: 'mid', description: "You briefly acknowledge but continue." },
-    { level: 'high', description: "You fully engage with the robot." }
+    { level: 'low', description: "I stay focused and do not look at the robot." },
+    { level: 'mid', description: "I briefly glance at the robot but keep working." },
+    { level: 'high', description: "I fully look at the robot and pause what I'm doing." }
   ]
 };
 
@@ -181,37 +181,94 @@ const LOD_OPTIONS = [
   { id: 'low', label: 'Minimal', duration: '3s' }
 ];
 
-const FULL_SIM_BASE_WIDTH = 660;
+const STAGE_COLORS = {
+  departure: '#e94560',
+  approach: '#ffc107',
+  arrival: '#a855f7'
+};
+
+const hexToRgba = (hex, alpha = 1) => {
+  if (!hex) return `rgba(0,0,0,${alpha})`;
+  const sanitized = hex.replace('#', '');
+  const bigint = parseInt(sanitized.length === 3
+    ? sanitized.split('').map(ch => ch + ch).join('')
+    : sanitized, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const FULL_SIM_BASE_WIDTH = 480;
 const FULL_SIM_HEIGHT = 150;
+const USER_COLOR = '#ffffff';
+const ATTENTION_ARROW_OFFSETS = {
+  high: { dx: -40, dy: -8 },
+  mid: { dx: -32, dy: 20 },
+  low: { dx: 0, dy: 32 }
+};
+const ATTENTION_ARROW_COLOR = '#ff4d6d';
+
+const drawAttentionArrow = (ctx, originX, originY, level, scale = 1) => {
+  if (!level) return;
+  const base = ATTENTION_ARROW_OFFSETS[level] || ATTENTION_ARROW_OFFSETS.low;
+  const dx = base.dx * scale;
+  const dy = base.dy * scale;
+  const endX = originX + dx;
+  const endY = originY + dy;
+  const angle = Math.atan2(dy, dx);
+
+  ctx.strokeStyle = ATTENTION_ARROW_COLOR;
+  ctx.fillStyle = ATTENTION_ARROW_COLOR;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(originX, originY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  const headSize = 7;
+  ctx.moveTo(endX, endY);
+  ctx.lineTo(
+    endX - headSize * Math.cos(angle - Math.PI / 6),
+    endY - headSize * Math.sin(angle - Math.PI / 6)
+  );
+  ctx.lineTo(
+    endX - headSize * Math.cos(angle + Math.PI / 6),
+    endY - headSize * Math.sin(angle + Math.PI / 6)
+  );
+  ctx.closePath();
+  ctx.fill();
+};
 const STAGE_ZONE_LAYOUT = {
   departure: {
-    startRatio: 600 / FULL_SIM_BASE_WIDTH,
-    endRatio: 480 / FULL_SIM_BASE_WIDTH,
-    color: 'rgba(233, 69, 96, 0.15)'
+    startRatio: 40 / FULL_SIM_BASE_WIDTH,
+    endRatio: 150 / FULL_SIM_BASE_WIDTH,
+    color: hexToRgba(STAGE_COLORS.departure, 0.18)
   },
   approach: {
-    startRatio: 480 / FULL_SIM_BASE_WIDTH,
-    endRatio: 150 / FULL_SIM_BASE_WIDTH,
-    color: 'rgba(255, 193, 7, 0.12)'
+    startRatio: 150 / FULL_SIM_BASE_WIDTH,
+    endRatio: 300 / FULL_SIM_BASE_WIDTH,
+    color: hexToRgba(STAGE_COLORS.approach, 0.15)
   },
   arrival: {
-    startRatio: 150 / FULL_SIM_BASE_WIDTH,
-    endRatio: 80 / FULL_SIM_BASE_WIDTH,
-    color: 'rgba(0, 217, 255, 0.15)'
+    startRatio: 300 / FULL_SIM_BASE_WIDTH,
+    endRatio: 420 / FULL_SIM_BASE_WIDTH,
+    color: hexToRgba(STAGE_COLORS.arrival, 0.18)
   }
 };
 
-// Mini simulation for each stage column - FIXED direction
+// Mini simulation for each stage column - robot moves left to right
 function MiniSimulation({ stage, choices, task, isActive }) {
   const canvasRef = useRef(null);
   
   // Adjusted stage zones: departure and arrival smaller
-  // Robot moves from right to left (approaching user on left)
+  // Robot moves from left to right (approaching user on right)
   // Canvas width = 300, so positions are relative to that
   const stageBounds = {
-    departure: { startX: 270, endX: 220 },   // small zone on right
-    approach: { startX: 220, endX: 80 },     // large middle zone
-    arrival: { startX: 80, endX: 50 }        // small zone near user
+    departure: { startX: 30, endX: 100 },   // small zone on left
+    approach: { startX: 100, endX: 230 },   // large middle zone
+    arrival: { startX: 230, endX: 270 }     // small zone near user
   };
 
   useEffect(() => {
@@ -231,21 +288,32 @@ function MiniSimulation({ stage, choices, task, isActive }) {
 
     // Stage zone highlight - robot travels through this zone
     const bounds = stageBounds[stage];
-    ctx.fillStyle = isActive ? 'rgba(0, 217, 255, 0.12)' : 'rgba(255,255,255,0.03)';
-    ctx.fillRect(bounds.endX, 0, bounds.startX - bounds.endX, h - 15);
+    const highlightColor = isActive
+      ? hexToRgba(STAGE_COLORS[stage], 0.2)
+      : 'rgba(255,255,255,0.03)';
+    const zoneStart = Math.min(bounds.startX, bounds.endX);
+    const zoneWidth = Math.abs(bounds.startX - bounds.endX);
+    ctx.fillRect(zoneStart, 0, zoneWidth, h - 15);
 
-    // User (left side)
-    ctx.fillStyle = '#e94560';
+    // User (right side, smaller icon)
+    const userCenterX = w - 10;
+    ctx.fillStyle = USER_COLOR;
     ctx.beginPath();
-    ctx.arc(25, h - 35, 12, 0, Math.PI * 2);
+    ctx.arc(userCenterX, h - 35, 8, 0, Math.PI * 2);
     ctx.fill();
-
-    // Robot position: starts at startX, ends at endX (moving left toward user)
+    const engagementLevel = stage === 'departure'
+      ? ENGAGEMENT_LEVELS.departure.level
+      : choices?.engagement?.level;
+    if (engagementLevel) {
+      drawAttentionArrow(ctx, userCenterX, h - 35, engagementLevel, 0.55);
+    }
+    
+    // Robot position: starts at startX, ends at endX (moving right toward user)
     const robotX = choices?.movement 
       ? bounds.endX  // if movement selected, show at end position
       : bounds.startX; // otherwise show at start position
 
-    // Robot body (on right side, facing left toward user)
+    // Robot body (on left side, facing right toward user)
     ctx.fillStyle = isActive ? '#00d9ff' : '#4a5568';
     ctx.fillRect(robotX - 10, h - 42, 20, 20);
     
@@ -256,11 +324,16 @@ function MiniSimulation({ stage, choices, task, isActive }) {
     ctx.arc(robotX + 5, h - 20, 4, 0, Math.PI * 2);
     ctx.fill();
 
+    // Robot face (eyes facing right toward user)
+    ctx.fillStyle = '#0f1419';
+    ctx.fillRect(robotX + 2, h - 38, 4, 4);
+    ctx.fillRect(robotX + 8, h - 38, 4, 4);
+
     // Speech indicator
     if (choices?.speechEnabled?.enabled && choices?.speechTiming) {
       ctx.fillStyle = '#fff';
       ctx.font = '10px system-ui';
-      ctx.fillText('💬', robotX - 18, h - 48);
+      ctx.fillText('💬', robotX + 8, h - 48);
     }
 
   }, [stage, choices, isActive]);
@@ -288,7 +361,7 @@ const LOD_DURATIONS = {
 };
 
 // Full simulation showing complete journey
-function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
+function FullSimulation({ allChoices, task, isPlaying, onComplete, hoveredStage }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const [fullSimWidth, setFullSimWidth] = useState(FULL_SIM_BASE_WIDTH);
@@ -309,6 +382,7 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
   const [showSpeech, setShowSpeech] = useState(false);
   const [speechText, setSpeechText] = useState('');
   const [speechProgress, setSpeechProgress] = useState(0);
+  const highlightedStage = hoveredStage ?? currentStage;
 
   useEffect(() => {
     const updateWidth = () => {
@@ -324,19 +398,12 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
   }, []);
 
   useEffect(() => {
-    if (!isPlaying) {
-      setRobotX(stageZones.departure.startX);
-    }
-  }, [isPlaying, stageZones]);
+    if (!isPlaying) return;
 
-  useEffect(() => {
-    if (!isPlaying) {
-      setRobotX(stageZones.departure.startX);
-      setCurrentStage(null);
-      setShowSpeech(false);
-      setSpeechProgress(0);
-      return;
-    }
+    setRobotX(stageZones.departure.startX);
+    setCurrentStage(null);
+    setShowSpeech(false);
+    setSpeechProgress(0);
 
     let stageIndex = 0;
     let phaseStartTime = null;
@@ -355,7 +422,8 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
       const choices = allChoices[stage];
       const zone = stageZones[stage];
       const speed = choices?.movement?.speed ?? 1.0;
-      const moveDistance = zone.startX - zone.endX;
+      const moveDistance = Math.abs(zone.endX - zone.startX);
+      const direction = zone.endX >= zone.startX ? 1 : -1;
       const moveDuration = (moveDistance / 120) * (1000 / speed); // Base: 120px per second at speed 1.0
 
       const hasSpeech = choices?.speechEnabled?.enabled && choices?.speechTiming && choices?.lod;
@@ -397,7 +465,7 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
         }
       } else if (currentPhase === 'moving') {
         const moveProgress = Math.min(phaseElapsed / moveDuration, 1);
-        const newX = zone.startX - moveDistance * moveProgress;
+        const newX = zone.startX + direction * moveDistance * moveProgress;
         setRobotX(newX);
 
         // Update speech progress if during
@@ -497,13 +565,15 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
     ];
     
     zoneEntries.forEach(([stage, zone]) => {
-      ctx.fillStyle = currentStage === stage ? zone.color : 'rgba(255,255,255,0.02)';
-      ctx.fillRect(zone.endX, 0, zone.startX - zone.endX, h - 25);
+      ctx.fillStyle = highlightedStage === stage ? zone.color : 'rgba(255,255,255,0.02)';
+      const zoneStart = Math.min(zone.startX, zone.endX);
+      const zoneWidth = Math.abs(zone.startX - zone.endX);
+      ctx.fillRect(zoneStart, 0, zoneWidth, h - 25);
       
       // Zone labels at top
-      ctx.fillStyle = currentStage === stage ? '#fff' : '#4a5568';
+      ctx.fillStyle = highlightedStage === stage ? '#fff' : '#4a5568';
       ctx.font = '10px system-ui';
-      const labelX = zone.endX + (zone.startX - zone.endX) / 2 - 20;
+      const labelX = zoneStart + zoneWidth / 2 - 20;
       ctx.fillText(stage.charAt(0).toUpperCase() + stage.slice(1), labelX, 14);
     });
 
@@ -518,32 +588,41 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
     });
     ctx.setLineDash([]);
 
-    // User (left side, at desk)
+    // User (right side, at desk)
     // Desk
+    const deskWidth = 60;
+    const userDeskX = w - deskWidth - 60;
     ctx.fillStyle = '#2d3748';
-    ctx.fillRect(8, h - 60, 50, 35);
+    ctx.fillRect(userDeskX, h - 60, deskWidth, 35);
     
     // User
-    ctx.fillStyle = '#e94560';
+    const userCenterX = userDeskX + deskWidth / 2;
+    ctx.fillStyle = USER_COLOR;
     ctx.beginPath();
-    ctx.arc(33, h - 82, 18, 0, Math.PI * 2);
+    ctx.arc(userCenterX, h - 82, 18, 0, Math.PI * 2);
     ctx.fill();
+    const highlightedEngagement = highlightedStage === 'departure'
+      ? ENGAGEMENT_LEVELS.departure.level
+      : allChoices[highlightedStage]?.engagement?.level;
+    if (highlightedEngagement) {
+      drawAttentionArrow(ctx, userCenterX, h - 82, highlightedEngagement, 1.1);
+    }
     
     // User task label BELOW user
     ctx.fillStyle = '#a0aec0';
     ctx.font = '9px system-ui';
     ctx.textAlign = 'center';
-    ctx.fillText(task.human_task_short, 33, h - 8);
+    ctx.fillText(task.human_task_short, userCenterX, h - 8);
     ctx.textAlign = 'left';
 
-    // Robot (moving from right to left)
+    // Robot (moving from left to right)
     ctx.fillStyle = '#00d9ff';
     ctx.fillRect(robotX - 16, h - 60, 32, 30);
     
-    // Robot face (eyes facing left toward user)
+    // Robot face (eyes facing right toward user)
     ctx.fillStyle = '#0f1419';
-    ctx.fillRect(robotX - 12, h - 54, 5, 5);
-    ctx.fillRect(robotX - 2, h - 54, 5, 5);
+    ctx.fillRect(robotX + 6, h - 54, 5, 5);
+    ctx.fillRect(robotX + 12, h - 54, 5, 5);
     
     // Robot wheels
     ctx.fillStyle = '#1a2332';
@@ -559,11 +638,11 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
     ctx.fillText(task.robot_item, robotX, h - 8);
     ctx.textAlign = 'left';
 
-    // Speech bubble (to the left of robot, pointing right)
+    // Speech bubble (to the right of robot, pointing left)
     if (showSpeech && speechText) {
       const bubbleW = 160;
       const bubbleH = 55;
-      const bubbleX = Math.max(robotX - bubbleW - 25, 70);
+      const bubbleX = Math.min(robotX + 25, w - bubbleW - 10);
       const bubbleY = h - 130;
 
       // Bubble background
@@ -572,11 +651,11 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
       ctx.roundRect(bubbleX, bubbleY, bubbleW, bubbleH, 6);
       ctx.fill();
 
-      // Pointer (pointing to robot on right)
+      // Pointer (pointing to robot on left)
       ctx.beginPath();
-      ctx.moveTo(bubbleX + bubbleW, bubbleY + 20);
-      ctx.lineTo(bubbleX + bubbleW + 10, bubbleY + 27);
-      ctx.lineTo(bubbleX + bubbleW, bubbleY + 34);
+      ctx.moveTo(bubbleX, bubbleY + 20);
+      ctx.lineTo(bubbleX - 10, bubbleY + 27);
+      ctx.lineTo(bubbleX, bubbleY + 34);
       ctx.fill();
 
       // Speech progress bar at bottom of bubble
@@ -610,7 +689,7 @@ function FullSimulation({ allChoices, task, isPlaying, onComplete }) {
       }
     }
 
-  }, [robotX, currentStage, showSpeech, speechText, speechProgress, task, fullSimWidth, stageZones]);
+  }, [robotX, currentStage, highlightedStage, showSpeech, speechText, speechProgress, task, fullSimWidth, stageZones, allChoices]);
 
   return (
     <canvas
@@ -689,13 +768,7 @@ function RadioGroup({ label, options, value, onChange, showPreview, task, indent
 }
 
 // Stage column component
-function StageColumn({ stage, stageIndex, choices, onChoiceChange, task, isComplete }) {
-  const stageColors = {
-    departure: '#e94560',
-    approach: '#ffc107', 
-    arrival: '#00d9ff'
-  };
-
+function StageColumn({ stage, stageIndex, choices, onChoiceChange, task, isComplete, onHoverChange }) {
   const stageDescriptions = {
     departure: 'Robot starts moving',
     approach: 'Robot getting closer',
@@ -703,8 +776,11 @@ function StageColumn({ stage, stageIndex, choices, onChoiceChange, task, isCompl
   };
 
   return (
-    <div style={{
-      flex: stage === 'approach' ? 1.3 : 1,
+    <div
+      onMouseEnter={() => onHoverChange?.(stage)}
+      onMouseLeave={() => onHoverChange?.(null)}
+      style={{
+      flex: 1,
       background: '#12171f',
       borderRadius: '12px',
       padding: '14px',
@@ -722,7 +798,7 @@ function StageColumn({ stage, stageIndex, choices, onChoiceChange, task, isCompl
           width: '26px',
           height: '26px',
           borderRadius: '50%',
-          background: stageColors[stage],
+          background: STAGE_COLORS[stage],
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -768,8 +844,13 @@ function StageColumn({ stage, stageIndex, choices, onChoiceChange, task, isCompl
         marginBottom: '14px',
         fontSize: '11px'
       }}>
-        <div style={{ color: '#718096', marginBottom: '6px' }}>
-          How much attention are you paying to the robot?
+        <div style={{
+          color: '#66c7ff',
+          marginBottom: '6px',
+          fontStyle: 'italic',
+          fontWeight: 600
+        }}>
+          How much attention would you pay to the robot?
         </div>
 
         {/* [CHANGED] Departure is fixed to low; Approach/Arrival are selectable */}
@@ -813,46 +894,59 @@ function StageColumn({ stage, stageIndex, choices, onChoiceChange, task, isCompl
         )}
       </div>
 
-      {/* Movement Selection */}
-      <RadioGroup
-        label="Movement"
-        options={MOVEMENT_OPTIONS}
-        value={choices.movement}
-        onChange={(opt) => onChoiceChange(stage, 'movement', opt)}
-      />
+      {/* Robot Behavior */}
+      <div style={{
+        background: '#1a2332',
+        borderRadius: '6px',
+        padding: '8px 10px',
+        marginBottom: '14px',
+        fontSize: '11px'
+      }}>
+        <div style={{
+          color: '#66c7ff',
+          marginBottom: '6px',
+          fontStyle: 'italic',
+          fontWeight: 600
+        }}>
+          What would you like the robot to do?
+        </div>
+        <RadioGroup
+          label="Movement"
+          options={MOVEMENT_OPTIONS}
+          value={choices.movement}
+          onChange={(opt) => onChoiceChange(stage, 'movement', opt)}
+        />
 
-      {/* Speech Enabled Selection */}
-      <RadioGroup
-        label="Speech"
-        options={SPEECH_ENABLED_OPTIONS}
-        value={choices.speechEnabled}
-        onChange={(opt) => onChoiceChange(stage, 'speechEnabled', opt)}
-      />
+        <RadioGroup
+          label="Speech"
+          options={SPEECH_ENABLED_OPTIONS}
+          value={choices.speechEnabled}
+          onChange={(opt) => onChoiceChange(stage, 'speechEnabled', opt)}
+        />
 
-      {/* Speech Timing - only if speech enabled */}
-      {choices.speechEnabled?.enabled && (
-        <>
-          <RadioGroup
-            label="When to speak"
-            options={SPEECH_TIMING_OPTIONS}
-            value={choices.speechTiming}
-            onChange={(opt) => onChoiceChange(stage, 'speechTiming', opt)}
-            indent={true}
-          />
+        {choices.speechEnabled?.enabled && (
+          <>
+            <RadioGroup
+              label="When to speak"
+              options={SPEECH_TIMING_OPTIONS}
+              value={choices.speechTiming}
+              onChange={(opt) => onChoiceChange(stage, 'speechTiming', opt)}
+              indent={true}
+            />
 
-          {/* LOD Selection */}
-          <RadioGroup
-            label="Detail level"
-            options={LOD_OPTIONS}
-            value={choices.lod}
-            onChange={(opt) => onChoiceChange(stage, 'lod', opt)}
-            showPreview={true}
-            showDuration={true}
-            task={task}
-            indent={true}
-          />
-        </>
-      )}
+            <RadioGroup
+              label="Detail level"
+              options={LOD_OPTIONS}
+              value={choices.lod}
+              onChange={(opt) => onChoiceChange(stage, 'lod', opt)}
+              showPreview={true}
+              showDuration={true}
+              task={task}
+              indent={true}
+            />
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -898,6 +992,7 @@ export default function App() {
   const scenarioChoicesRef = useRef({});
   const [choices, setChoices] = useState(makeEmptyChoices());
   const [isPlaying, setIsPlaying] = useState(false);
+  const [hoveredStage, setHoveredStage] = useState(null);
   const [viewportWidth, setViewportWidth] = useState(getInitialViewportWidth());
   // [NEW] Onboarding state
   const [onboardingGroup, setOnboardingGroup] = useState('origami');
@@ -912,6 +1007,10 @@ export default function App() {
   useEffect(() => {
     scenarioChoicesRef.current = scenarioChoices;
   }, [scenarioChoices]);
+
+  useEffect(() => {
+    setHoveredStage(null);
+  }, [currentTaskIndex, phase]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1039,7 +1138,7 @@ export default function App() {
   const showThreeColumnStages = viewportWidth >= 1350;
   const showTwoColumnStages = viewportWidth >= 900 && viewportWidth < 1350;
   const stageGridTemplate = showThreeColumnStages
-    ? '1fr 1.4fr 1fr'
+    ? 'repeat(3, minmax(280px, 1fr))'
     : showTwoColumnStages
       ? 'repeat(2, minmax(280px, 1fr))'
       : '1fr';
@@ -1425,8 +1524,41 @@ export default function App() {
             allChoices={choices}
             task={currentTask}
             isPlaying={isPlaying}
+            hoveredStage={hoveredStage}
             onComplete={() => setIsPlaying(false)}
           />
+        </div>
+
+        {/* Stage descriptions */}
+        <div style={{
+          border: '1px solid #2d3748',
+          borderRadius: '12px',
+          padding: '16px',
+          marginBottom: '20px',
+          background: '#12171f',
+          display: 'grid',
+          gridTemplateColumns: stageGridTemplate,
+          gap: stageGridGap
+        }}>
+          {[
+            {
+              title: 'Stage 1: Departure',
+              text: 'In this stage, the robot starts moving from the background and begins approaching you.'
+            },
+            {
+              title: 'Stage 2: Approach',
+              text: 'In this stage, the robot is moving toward you within your peripheral awareness, so you may start to notice it.'
+            },
+            {
+              title: 'Stage 3: Arrival',
+              text: 'In this stage, the robot reaches you and stops close enough to interact with you or deliver the item.'
+            }
+          ].map(({ title, text }) => (
+            <div key={title} style={{ fontSize: '0.9rem', color: '#a0aec0' }}>
+              <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '6px' }}>{title}</div>
+              <div style={{ lineHeight: 1.5 }}>{text}</div>
+            </div>
+          ))}
         </div>
 
         {/* Three Stage Columns */}
@@ -1445,6 +1577,7 @@ export default function App() {
               onChoiceChange={handleChoiceChange}
               task={currentTask}
               isComplete={isStageComplete(stage)}
+              onHoverChange={setHoveredStage}
             />
           ))}
         </div>
